@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Literal
 
 
@@ -24,3 +24,13 @@ class MessageRequest(BaseModel):
 
     chat_id: str
     text: str
+
+
+class ChannelResponse(BaseModel):
+    id: str = Field(..., alias="_id")
+    name: str
+    secret_token: str
+
+    class Config:
+        allow_population_by_alias = True
+        allow_population_by_field_name = True

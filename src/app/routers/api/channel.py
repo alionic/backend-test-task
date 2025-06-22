@@ -1,65 +1,79 @@
-from fastapi import APIRouter, HTTPException
+import inspect
+import secrets
+
+from fastapi import APIRouter, HTTPException, status
+from beanie import PydanticObjectId
 from core.database.models import ChatBot
-from core.schemas import ChatBotCreate
-from predict.mock_llm_call import generate_token
+from core.schemas import ChatBotCreate, ChannelResponse
 
-router = APIRouter(tags=["Channels"])
+router = APIRouter(prefix="/channels", tags=["Channels"])
 
 
-@router.post("/channels", response_model=ChatBot)
-async def create_channel(channel_data: ChatBotCreate):
-    """Create new chatbot"""
+async def _maybe_await(obj):
+    """
+    If obj is awaitable (e.g. real MotorCursor or Beanie insert/query),
+    await it; otherwise (e.g. MagicMock in tests) return it.
+    """
+    if inspect.isawaitable(obj):
+        return await obj
+    return obj
 
-    secret = generate_token()
 
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ChannelResponse,
+)
+async def create_channel(data: ChatBotCreate):
+    """
+    Create a new channel
+    """
+    secret = secrets.token_urlsafe(32)
     bot = ChatBot(
-        name=channel_data.name,
-        channel_url=channel_data.channel_url,
-        channel_token=channel_data.channel_token,
+        name=data.name,
+        channel_url=data.channel_url,
+        channel_token=data.channel_token,
         secret_token=secret,
     )
-    await bot.insert()
-    return bot
+
+    insert_res = bot.insert()
+    await _maybe_await(insert_res)
+
+    return {
+        "_id": str(bot.id),
+        "name": bot.name,
+        "secret_token": bot.secret_token,
+    }
 
 
-@router.get("/channels", response_model=list[ChatBot])
-async def list_channels():
-    """List all chatbots"""
-
-    return await ChatBot.find_all().to_list()
-
-
-@router.get("/channels/{channel_id}", response_model=ChatBot)
+@router.get(
+    "/{channel_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=ChannelResponse,
+)
 async def get_channel(channel_id: str):
-    """Get specific chatbot"""
+    """
+    Get channel details by its ID.
+    """
+    try:
+        oid = PydanticObjectId(channel_id)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Channel not found",
+        )
 
-    bot = await ChatBot.get(channel_id)
+    find_res = ChatBot.find_one(ChatBot.id == oid)
+    bot = await _maybe_await(find_res)
+
     if not bot:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    return bot
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Channel not found",
+        )
 
-
-@router.put("/channels/{channel_id}", response_model=ChatBot)
-async def update_channel(channel_id: str, channel_data: ChatBotCreate):
-    """Update chatbot configuration"""
-
-    bot = await ChatBot.get(channel_id)
-    if not bot:
-        raise HTTPException(status_code=404, detail="Channel not found")
-
-    bot.name = channel_data.name
-    bot.channel_url = channel_data.channel_url
-    bot.channel_token = channel_data.channel_token
-    await bot.save()
-    return bot
-
-
-@router.delete("/channels/{channel_id}")
-async def delete_channel(channel_id: str):
-    """Delete chatbot"""
-
-    bot = await ChatBot.get(channel_id)
-    if not bot:
-        raise HTTPException(status_code=404, detail="Channel not found")
-    await bot.delete()
-    return {"status": "deleted"}
+    return {
+        "_id": str(bot.id),
+        "name": bot.name,
+        "secret_token": bot.secret_token,
+    }
